@@ -1,415 +1,16 @@
-# 🎵 Music Recommender Simulation
+# 🎵 VibeMatch AI: A Grounded Music Recommender
 
-## Project Summary
+Describe what you want to hear in plain English, like *"sad acoustic songs for a rainy day"*, and VibeMatch AI recommends songs from its catalog and explains each pick. It uses **retrieval-augmented generation (RAG)**: an LLM (Google Gemini) understands the request and writes the explanations, but it may only recommend songs that a deterministic retriever pulled from the catalog. Code-level guardrails check this, so the AI cannot invent a song.
 
-In this project you will build and explain a small music recommender system.
+**Why it matters:** LLM-powered recommenders are useful because they understand vague, human requests ("music for the gym") that keyword systems can't. They are also prone to confidently recommending things that don't exist. This project shows one way to get the first without the second: keep the LLM on a short leash, check its output in code, log every step, and measure its quality against a simple baseline.
 
-Your goal is to:
+## Original Project (Module 3)
 
-- Represent songs and a user "taste profile" as data
-- Design a scoring rule that turns that data into recommendations
-- Evaluate what your system gets right and wrong
-- Reflect on how this mirrors real world AI recommenders
+This project grows out of **VibeMatch 1.0, the Music Recommender Simulation** from Module 3. That version was a rule-based, content-based recommender. It loaded a 20-song catalog, scored each song against a fixed taste profile (favorite genre, favorite mood, target energy and acoustic preference) and printed the top 5 with the reason behind each score. Its goal was to show how recommenders turn data into rankings, and to stress-test the scoring rule with adversarial profiles and document its biases. The full Module 3 write-up is preserved in [docs/module3_vibematch_report.md](docs/module3_vibematch_report.md).
 
-My version, **VibeMatch 1.0**, is a content-based recommender that runs in the terminal. It loads a 20-song catalog, scores every song against a user's favorite genre, favorite mood, target energy and acoustic preference, and prints the top 5 with the reasons behind each score. I tested it with 7 user profiles, including 4 edge cases designed to trick it, ran a weight-shift experiment, and documented its biases in the [model card](model_card.md).
+**What changed:** Module 3 needed a hand-built profile dictionary. VibeMatch AI takes free text, uses an LLM to understand it, keeps the Module 3 scorer as the retriever, and adds guardrails, logging, fallbacks and an evaluation harness.
 
----
-
-## How The System Works
-
-Real-world platforms like Spotify and YouTube combine two approaches. **Collaborative filtering** recommends what similar users liked, based on behavior such as likes, skips, replays and playlist adds. **Content-based filtering** recommends songs whose attributes, such as genre, mood, tempo and energy, resemble what the user already enjoys. These systems usually work in two stages: they first gather candidate songs, then rank them with a model that predicts what the user will engage with. My version is a small **content-based** recommender, because the dataset has song attributes but no listening history from other users. It prioritizes **genre first, then mood, then how close a song's energy is to the user's target**, so it favors songs that match the user's overall "vibe" rather than simply the loudest or calmest songs.
-
-### Features used
-
-**`Song`**
-- `genre`: compared to the user's favorite genre (exact match)
-- `mood`: compared to the user's favorite mood (exact match)
-- `energy` (0–1): compared to the user's target energy by closeness
-- `acousticness` (0–1): used as a small tiebreaker based on the user's acoustic preference
-- `title`, `artist`: shown in results and explanations
-- Loaded but not scored: `tempo_bpm`, `danceability` and `valence`. Tempo and danceability are strongly correlated with energy in this dataset (0.96 and 0.86), so scoring them would count the same signal twice.
-
-**`UserProfile`**
-- `favorite_genre`: e.g. `"pop"`
-- `favorite_mood`: e.g. `"happy"`
-- `target_energy`: e.g. `0.8`
-- `likes_acoustic`: `True` / `False`
-
-### Algorithm recipe
-
-**Scoring rule (one song):**
-
-| Rule | Points |
-|---|---|
-| Genre matches `favorite_genre` | +2.0 |
-| Mood matches `favorite_mood` | +1.0 |
-| Energy closeness: `1 − abs(song.energy − target_energy)` | up to +1.0 |
-| Acoustic fit: `acousticness` if `likes_acoustic`, else `1 − acousticness` | up to +0.5 |
-
-The maximum score is 4.5. Each rule that adds points also records a reason, such as "genre match (+2.0)", so every recommendation can be explained.
-
-**Ranking rule (list of songs):** score every song, sort from highest to lowest score, and return the top `k`.
-
-```
-UserProfile + songs.csv → score each song → sort by score → top k + reasons
-```
-
-### Dataset and example profile
-
-`data/songs.csv` was expanded from 10 to **20 songs** (17 genres, 16 moods). The new songs add genres and moods that were missing, such as metal, classical, folk, sad and angry, and include low-valence (dark) songs.
-
-`src/main.py` runs seven profiles (see **Stress Test Results**). The default is an upbeat **pop/happy** listener:
-
-```python
-{"favorite_genre": "pop", "favorite_mood": "happy", "target_energy": 0.80, "likes_acoustic": False}
-```
-
-The second is a "late-night study" **lofi/chill** listener:
-
-```python
-{"favorite_genre": "lofi", "favorite_mood": "chill", "target_energy": 0.40, "likes_acoustic": True}
-```
-
-Expected top 3 for lofi/chill: **Library Rain** (4.38), **Midnight Coding** (4.33), **Focus Flow** (3.39).
-
-### Expected biases and limitations
-
-- **Over-prioritizes genre.** A genre match (+2.0) is worth twice a mood match, so a same-genre song with the wrong mood can outrank a song that fits the mood perfectly. For a pop/happy user, "Gym Hero" (pop, *intense*) is expected to rank above "Rooftop Lights" (indie pop, *happy*).
-- **Exact string matching is strict.** "indie pop" gets no credit for "pop", and "relaxed" or "peaceful" get no credit for "chill", even though they feel similar.
-- **Sparse genres create a score cliff.** Most genres have only one song, so after the genre matches run out, the remaining songs are separated by tiny differences in energy and can be nearly tied.
-- **No happy-vs-dark signal.** Valence isn't scored, so for a high-energy user, angry metal and festive Latin music score about the same.
-- **Energy dominates the numeric score.** Energy, tempo, danceability and acousticness are highly correlated in this dataset, so the system mostly sees one dimension: calm vs intense.
-- **Small, hand-made catalog.** 20 songs with made-up values reflect the dataset author's judgment about each genre's "typical" sound, not real listening data.
-
----
-
-## Stress Test Results
-
-`src/main.py` runs seven profiles: three core listener types and four adversarial or edge-case profiles designed to trick the scoring logic. The output for each profile is below, followed by what it shows.
-
-### High-Energy Pop
-
-```
-================================================================
-Profile: High-Energy Pop
-  genre=pop  mood=happy  energy=0.80  acoustic=False
-================================================================
-1. Sunrise City — Neon Echo
-   Score: 4.39 / 4.50   (pop, happy)
-     • genre match: pop (+2.0)
-     • mood match: happy (+1.0)
-     • energy 0.82 vs target 0.80 (+0.98)
-     • non-acoustic fit (+0.41)
-
-2. Gym Hero — Max Pulse
-   Score: 3.35 / 4.50   (pop, intense)
-     • genre match: pop (+2.0)
-     • energy 0.93 vs target 0.80 (+0.87)
-     • non-acoustic fit (+0.47)
-
-3. Rooftop Lights — Indigo Parade
-   Score: 2.29 / 4.50   (indie pop, happy)
-     • mood match: happy (+1.0)
-     • energy 0.76 vs target 0.80 (+0.96)
-     • non-acoustic fit (+0.33)
-
-4. Concrete Crown — Mic Atlas
-   Score: 1.44 / 4.50   (hip hop, confident)
-     • energy 0.78 vs target 0.80 (+0.98)
-     • non-acoustic fit (+0.46)
-
-5. Storm Runner — Voltline
-   Score: 1.34 / 4.50   (rock, intense)
-     • energy 0.91 vs target 0.80 (+0.89)
-     • non-acoustic fit (+0.45)
-```
-
-Works as expected. Sunrise City is the only pop + happy song. Gym Hero (pop, *intense*) beats Rooftop Lights (indie pop, *happy*) because genre (+2.0) outweighs mood (+1.0).
-
-### Chill Lofi
-
-```
-================================================================
-Profile: Chill Lofi
-  genre=lofi  mood=chill  energy=0.40  acoustic=True
-================================================================
-1. Library Rain — Paper Lanterns
-   Score: 4.38 / 4.50   (lofi, chill)
-     • genre match: lofi (+2.0)
-     • mood match: chill (+1.0)
-     • energy 0.35 vs target 0.40 (+0.95)
-     • acoustic fit (+0.43)
-
-2. Midnight Coding — LoRoom
-   Score: 4.33 / 4.50   (lofi, chill)
-     • genre match: lofi (+2.0)
-     • mood match: chill (+1.0)
-     • energy 0.42 vs target 0.40 (+0.98)
-     • acoustic fit (+0.35)
-
-3. Focus Flow — LoRoom
-   Score: 3.39 / 4.50   (lofi, focused)
-     • genre match: lofi (+2.0)
-     • energy 0.40 vs target 0.40 (+1.00)
-     • acoustic fit (+0.39)
-
-4. Spacewalk Thoughts — Orbit Bloom
-   Score: 2.34 / 4.50   (ambient, chill)
-     • mood match: chill (+1.0)
-     • energy 0.28 vs target 0.40 (+0.88)
-     • acoustic fit (+0.46)
-
-5. Coffee Shop Stories — Slow Stereo
-   Score: 1.42 / 4.50   (jazz, relaxed)
-     • energy 0.37 vs target 0.40 (+0.97)
-     • acoustic fit (+0.45)
-```
-
-Works as expected. All three lofi songs fill the top 3. Spacewalk Thoughts (ambient, chill) is the best non-lofi pick thanks to its mood match.
-
-### Deep Intense Rock
-
-```
-================================================================
-Profile: Deep Intense Rock
-  genre=rock  mood=intense  energy=0.90  acoustic=False
-================================================================
-1. Storm Runner — Voltline
-   Score: 4.44 / 4.50   (rock, intense)
-     • genre match: rock (+2.0)
-     • mood match: intense (+1.0)
-     • energy 0.91 vs target 0.90 (+0.99)
-     • non-acoustic fit (+0.45)
-
-2. Gym Hero — Max Pulse
-   Score: 2.44 / 4.50   (pop, intense)
-     • mood match: intense (+1.0)
-     • energy 0.93 vs target 0.90 (+0.97)
-     • non-acoustic fit (+0.47)
-
-3. Laser Rush — DJ Kinetic
-   Score: 1.43 / 4.50   (edm, energetic)
-     • energy 0.95 vs target 0.90 (+0.95)
-     • non-acoustic fit (+0.48)
-
-4. Iron Furnace — Grave Signal
-   Score: 1.42 / 4.50   (metal, angry)
-     • energy 0.97 vs target 0.90 (+0.93)
-     • non-acoustic fit (+0.48)
-
-5. Fuego en la Pista — Los Caminantes
-   Score: 1.36 / 4.50   (latin, festive)
-     • energy 0.86 vs target 0.90 (+0.96)
-     • non-acoustic fit (+0.40)
-```
-
-#1 is clearly right, but after the single rock song the list is effectively a tie: ranks 3–5 (EDM, metal, Latin) are within 0.07 of each other and are separated only by energy. A festive Latin song ranks right next to angry metal, because nothing in the score measures happy vs dark.
-
-### EDGE: Sad but Hyped
-
-```
-================================================================
-Profile: EDGE: Sad but Hyped
-  genre=edm  mood=sad  energy=0.90  acoustic=False
-================================================================
-1. Laser Rush — DJ Kinetic
-   Score: 3.43 / 4.50   (edm, energetic)
-     • genre match: edm (+2.0)
-     • energy 0.95 vs target 0.90 (+0.95)
-     • non-acoustic fit (+0.48)
-
-2. Gym Hero — Max Pulse
-   Score: 1.44 / 4.50   (pop, intense)
-     • energy 0.93 vs target 0.90 (+0.97)
-     • non-acoustic fit (+0.47)
-
-3. Storm Runner — Voltline
-   Score: 1.44 / 4.50   (rock, intense)
-     • energy 0.91 vs target 0.90 (+0.99)
-     • non-acoustic fit (+0.45)
-
-4. Iron Furnace — Grave Signal
-   Score: 1.42 / 4.50   (metal, angry)
-     • energy 0.97 vs target 0.90 (+0.93)
-     • non-acoustic fit (+0.48)
-
-5. Empty Train Station — Hollow Pines
-   Score: 1.39 / 4.50   (folk, sad)
-     • mood match: sad (+1.0)
-     • energy 0.24 vs target 0.90 (+0.34)
-     • non-acoustic fit (+0.05)
-```
-
-**The conflict is resolved in favor of energy.** The only sad song in the catalog (Empty Train Station) barely makes #5, because its low energy costs it more than the mood match earns. The other picks are intense or upbeat songs; Gym Hero is actually a cheerful track (valence 0.77). Valence isn't scored, so the system has no way to find "energetic *and* sad" music.
-
-### EDGE: Acoustic Headbanger
-
-```
-================================================================
-Profile: EDGE: Acoustic Headbanger
-  genre=metal  mood=angry  energy=0.95  acoustic=True
-================================================================
-1. Iron Furnace — Grave Signal
-   Score: 4.00 / 4.50   (metal, angry)
-     • genre match: metal (+2.0)
-     • mood match: angry (+1.0)
-     • energy 0.97 vs target 0.95 (+0.98)
-     • acoustic fit (+0.01)
-
-2. Laser Rush — DJ Kinetic
-   Score: 1.02 / 4.50   (edm, energetic)
-     • energy 0.95 vs target 0.95 (+1.00)
-     • acoustic fit (+0.02)
-
-3. Storm Runner — Voltline
-   Score: 1.01 / 4.50   (rock, intense)
-     • energy 0.91 vs target 0.95 (+0.96)
-     • acoustic fit (+0.05)
-
-4. Fuego en la Pista — Los Caminantes
-   Score: 1.01 / 4.50   (latin, festive)
-     • energy 0.86 vs target 0.95 (+0.91)
-     • acoustic fit (+0.10)
-
-5. Gym Hero — Max Pulse
-   Score: 1.01 / 4.50   (pop, intense)
-     • energy 0.93 vs target 0.95 (+0.98)
-     • acoustic fit (+0.03)
-```
-
-**The acoustic preference has almost no effect.** High-energy songs are never acoustic in this catalog, so the acoustic bonus is 0.01–0.10 for every top result. Ranks 2–5 are all 1.01–1.02, so their order is decided by tiny rounding differences and CSV order, not by real preference.
-
-### EDGE: Ghost Genre
-
-```
-================================================================
-Profile: EDGE: Ghost Genre
-  genre=k-pop  mood=euphoric  energy=0.50  acoustic=False
-================================================================
-1. Velvet After Hours — Sienna Rae
-   Score: 1.26 / 4.50   (r&b, romantic)
-     • energy 0.55 vs target 0.50 (+0.95)
-     • non-acoustic fit (+0.31)
-
-2. Concrete Crown — Mic Atlas
-   Score: 1.18 / 4.50   (hip hop, confident)
-     • energy 0.78 vs target 0.50 (+0.72)
-     • non-acoustic fit (+0.46)
-
-3. Island Breeze Riddim — Kofi Sunrise
-   Score: 1.18 / 4.50   (reggae, uplifting)
-     • energy 0.60 vs target 0.50 (+0.90)
-     • non-acoustic fit (+0.28)
-
-4. Night Drive Loop — Neon Echo
-   Score: 1.14 / 4.50   (synthwave, moody)
-     • energy 0.75 vs target 0.50 (+0.75)
-     • non-acoustic fit (+0.39)
-
-5. Dusty Porch Swing — Willow Creek Band
-   Score: 1.11 / 4.50   (country, nostalgic)
-     • energy 0.52 vs target 0.50 (+0.98)
-     • non-acoustic fit (+0.13)
-```
-
-**No error and no warning.** When the genre and mood don't exist in the catalog, the system quietly falls back to ranking by energy alone. It still presents 5 "recommendations", but the best score is only 1.26 / 4.50, and the user isn't told that nothing really matched.
-
-### EDGE: Out-of-Range Energy
-
-```
-================================================================
-Profile: EDGE: Out-of-Range Energy
-  genre=classical  mood=peaceful  energy=1.50  acoustic=True
-================================================================
-1. Moonlit Sonata No. 2 — Clara Voss
-   Score: 3.16 / 4.50   (classical, peaceful)
-     • genre match: classical (+2.0)
-     • mood match: peaceful (+1.0)
-     • energy 0.18 vs target 1.50 (+-0.32)
-     • acoustic fit (+0.48)
-
-2. Iron Furnace — Grave Signal
-   Score: 0.48 / 4.50   (metal, angry)
-     • energy 0.97 vs target 1.50 (+0.47)
-     • acoustic fit (+0.01)
-
-3. Laser Rush — DJ Kinetic
-   Score: 0.47 / 4.50   (edm, energetic)
-     • energy 0.95 vs target 1.50 (+0.45)
-     • acoustic fit (+0.02)
-
-4. Storm Runner — Voltline
-   Score: 0.46 / 4.50   (rock, intense)
-     • energy 0.91 vs target 1.50 (+0.41)
-     • acoustic fit (+0.05)
-
-5. Fuego en la Pista — Los Caminantes
-   Score: 0.46 / 4.50   (latin, festive)
-     • energy 0.86 vs target 1.50 (+0.36)
-     • acoustic fit (+0.10)
-```
-
-**Bug found: negative points.** A target energy of 1.5 is outside the valid 0–1 range, but it isn't rejected. The energy rule then gives Moonlit Sonata **−0.32** points (shown as `+-0.32`). The genre and mood matches still keep it at #1, but the input should be validated or clamped to 0–1.
-
-### Summary of findings
-
-| Profile | What it tests | Result |
-|---|---|---|
-| High-Energy Pop | Normal use | ✅ Sensible; genre bias visible at #2/#3 |
-| Chill Lofi | Normal use | ✅ Sensible |
-| Deep Intense Rock | Normal use | ⚠️ Correct #1, near-ties after it |
-| Sad but Hyped | Conflicting mood vs energy | ⚠️ Energy wins; the sad song barely makes the list |
-| Acoustic Headbanger | Conflicting acoustic vs energy | ⚠️ Acoustic preference is ignored in practice |
-| Ghost Genre | Genre/mood not in catalog | ⚠️ Silent fallback to energy only |
-| Out-of-Range Energy | Invalid input | ❌ Negative points; input isn't validated |
-
----
-
-## Getting Started
-
-### Setup
-
-1. Create and activate a virtual environment:
-
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate        # macOS / Linux / Git Bash
-   .\.venv\Scripts\Activate.ps1     # Windows PowerShell
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-
-3. Add your Gemini API key (free at https://aistudio.google.com/apikey):
-
-   ```bash
-   cp .env.example .env
-   # then edit .env and set GEMINI_API_KEY=...
-   ```
-
-   Without a key the app still runs in **offline mode** (keyword parsing plus the rule-based scorer's explanations).
-
-### Running the app
-
-All commands run from the project root.
-
-```bash
-python -m src.main "chill songs for studying"   # one request
-python -m src.main                              # interactive prompt
-python -m src.main --offline "upbeat pop"       # skip Gemini
-python -m src.main --verbose "gym music"        # show each pipeline step
-python -m src.main --demo                       # original Module 3 profile demo
-```
-
-Every pipeline step is logged to `logs/assistant.log`.
-
-### How the AI pipeline works
-
-Source: [diagrams/architecture.mmd](diagrams/architecture.mmd). Solid arrows are data flow; dotted arrows are checking and logging.
+## Architecture Overview
 
 ```mermaid
 %% System architecture: AI Music Recommender (RAG over the song catalog)
@@ -481,129 +82,178 @@ flowchart TD
     DEV -. improves .-> PROCESS
 ```
 
-1. **Guardrail:** reject empty or oversized requests.
-2. **Parse:** Gemini turns the request into a taste profile (genre, mood, energy, acoustic) using the catalog's own genre and mood vocabulary. If the call fails, a keyword parser is used instead.
-3. **Guardrail:** clamp energy to 0-1, fix types, and warn when a genre or mood is not in the catalog.
-4. **Retrieve:** the Module 3 scorer ranks all songs in `data/songs.csv` and keeps the top 8 candidates.
-5. **Generate:** Gemini chooses and explains up to 5 picks, seeing **only** those 8 candidates.
-6. **Guardrail:** any song id not in the retrieved candidates is dropped and logged. If no valid picks remain, the scorer's own explanations are used.
+*Source: [diagrams/architecture.mmd](diagrams/architecture.mmd). Solid arrows are data flow; dotted arrows are checking and logging.*
 
-### Running tests and evaluation
+A request moves through four stages:
 
-```bash
-pytest                          # unit tests (use a fake LLM, no API key needed)
-python -m src.evaluate          # offline baseline vs. Gemini RAG on 10 requests
-python -m src.evaluate --offline
+1. **Input:** the user's request plus the song catalog (`data/songs.csv`).
+2. **Process** ([src/assistant.py](src/assistant.py)):
+   - **Parser (LLM):** Gemini converts the request into a structured taste profile (genre, mood, energy 0-1, acoustic yes/no), choosing from the catalog's own genre and mood vocabulary. If Gemini fails, a keyword parser takes over.
+   - **Retriever:** the original Module 3 scoring function ranks every song against that profile and keeps the top 8 candidates.
+   - **Generator (LLM):** Gemini receives the request and only those 8 candidates, then picks up to 5 and writes a one-sentence reason for each.
+   - **Guardrails** sit between every step. They reject empty or oversized input, clamp invalid values, warn when a genre isn't in the catalog, flag weak matches, and drop any song ID that wasn't retrieved. If nothing valid remains, the app falls back to the scorer's own explanations.
+3. **Output** ([src/main.py](src/main.py)): ranked picks, explanations and any warnings.
+4. **Humans and testing:** the user reviews the warnings and can rephrase. Every step is logged to `logs/assistant.log` for the developer. `pytest` checks the guardrails, and [src/evaluate.py](src/evaluate.py) scores the whole pipeline against human-written test cases and compares it with an offline baseline.
+
+## Setup Instructions
+
+Requires **Python 3.10+**. Run all commands from the project root.
+
+1. **Clone and enter the repo**
+   ```bash
+   git clone https://github.com/TahirZogaj/applied-ai-system-project.git
+   cd applied-ai-system-project
+   ```
+2. **Create and activate a virtual environment**
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate          # macOS / Linux / Git Bash
+   .\.venv\Scripts\Activate.ps1       # Windows PowerShell
+   ```
+3. **Install dependencies**
+   ```bash
+   python -m pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+4. **Add a Gemini API key.** Get a free key at https://aistudio.google.com/apikey, then:
+   ```bash
+   cp .env.example .env
+   # edit .env and set GEMINI_API_KEY=your_key
+   ```
+   No key? Everything still runs in **offline mode**, using keyword parsing and the rule-based explanations.
+5. **Run it**
+   ```bash
+   python -m src.main "chill songs for studying"   # one request
+   python -m src.main                              # interactive prompt
+   python -m src.main --verbose "gym music"        # also print each pipeline step
+   python -m src.main --offline "upbeat pop"       # skip Gemini
+   python -m src.main --demo                       # original Module 3 profile demo
+   ```
+6. **Test and evaluate**
+   ```bash
+   pytest                         # 10 unit tests, no API key needed
+   python -m src.evaluate         # baseline vs. Gemini on 10 requests (~3-4 min on the free tier)
+   ```
+
+## Sample Interactions
+
+These are real outputs from `python -m src.main "<request>"` using `gemini-3.5-flash-lite`. The `profile (llm)` line shows how Gemini interpreted the request, and `answer: llm` confirms the picks came from Gemini and passed the grounding check.
+
+**1. Activity-based request.** Gemini maps "study" to the *focused* mood and a low energy target:
 ```
-
-The evaluation reports hit@1, precision (share of returned picks that fit), average number of picks, energy fit, grounding (no invented songs), weak-match flagging, consistency across repeated runs, and fallback rate. The full report is saved to `logs/eval_report.json`.
-
----
-
-## Sample Recommendation Output
-
-Output of `python -m src.main` for the default **pop/happy** profile:
-
-```
-Loaded songs: 20
-
+Request: chill lofi beats to study to
+  profile (llm): genre=lofi  mood=focused  energy=0.20  acoustic=False
 ================================================================
-Profile: High-Energy Pop
-  genre=pop  mood=happy  energy=0.80  acoustic=False
-================================================================
-1. Sunrise City — Neon Echo
-   Score: 4.39 / 4.50   (pop, happy)
-     • genre match: pop (+2.0)
-     • mood match: happy (+1.0)
-     • energy 0.82 vs target 0.80 (+0.98)
-     • non-acoustic fit (+0.41)
+Here are the best lofi tracks from the catalog to help you stay focused and relaxed while you study.
 
-2. Gym Hero — Max Pulse
-   Score: 3.35 / 4.50   (pop, intense)
-     • genre match: pop (+2.0)
-     • energy 0.93 vs target 0.80 (+0.87)
-     • non-acoustic fit (+0.47)
+1. Focus Flow — LoRoom  (lofi, focused, energy 0.40)
+     With its focused mood and lofi genre, 'Focus Flow' is an ideal match for studying.
+2. Midnight Coding — LoRoom  (lofi, chill, energy 0.42)
+     'Midnight Coding' brings a chill lofi vibe that fits background study sessions well.
+3. Library Rain — Paper Lanterns  (lofi, chill, energy 0.35)
+     'Library Rain' offers a tranquil, chill atmosphere suited for deep concentration.
 
-3. Rooftop Lights — Indigo Parade
-   Score: 2.29 / 4.50   (indie pop, happy)
-     • mood match: happy (+1.0)
-     • energy 0.76 vs target 0.80 (+0.96)
-     • non-acoustic fit (+0.33)
-
-4. Concrete Crown — Mic Atlas
-   Score: 1.44 / 4.50   (hip hop, confident)
-     • energy 0.78 vs target 0.80 (+0.98)
-     • non-acoustic fit (+0.46)
-
-5. Storm Runner — Voltline
-   Score: 1.34 / 4.50   (rock, intense)
-     • energy 0.91 vs target 0.80 (+0.89)
-     • non-acoustic fit (+0.45)
+[answer: llm | retrieved 8 candidates]
 ```
 
-**Does this match expectations?** Mostly yes. Sunrise City is the only song that matches pop *and* happy, so it ranks #1 with a near-perfect score. Gym Hero (#2) beats Rooftop Lights (#3) because a genre match (+2.0) outweighs a mood match (+1.0), even though Rooftop Lights arguably fits a "happy" listener better. This is the genre bias predicted above. Ranks 4–5 have no genre or mood match and are ordered only by energy closeness.
+**2. Vague request with no genre named.** "Intense and loud for the gym" becomes metal at energy 0.95. Gemini then reaches across genres for other high-energy songs and is open about it ("Although pop…"):
+```
+Request: something intense and loud for the gym
+  profile (llm): genre=metal  mood=intense  energy=0.95  acoustic=False
+================================================================
+1. Iron Furnace — Grave Signal  (metal, angry, energy 0.97)
+     It is a high-energy metal track with extreme intensity, a fast tempo, and low acousticness that fits your gym workout perfectly.
+2. Storm Runner — Voltline  (rock, intense, energy 0.91)
+     This rock song delivers intense energy and a driven tempo to help power through your workout.
+3. Gym Hero — Max Pulse  (pop, intense, energy 0.93)
+     Although pop, it features an intense mood and very high energy tailored for gym sessions.
+```
 
-**Screenshot or video** *(optional)*: <!-- Insert a screenshot or demo video link here -->
+**3. Request the catalog can't satisfy.** There is no K-pop in the catalog. Gemini says so instead of inventing K-pop songs, and offers the closest real songs:
+```
+Request: k-pop for a euphoric mood
+  profile (llm): genre=pop  mood=uplifting  energy=0.80  acoustic=False
+================================================================
+While the current catalog does not contain specific K-pop tracks, I have selected the best energetic pop candidates available to help create a euphoric mood.
 
----
+1. Sunrise City — Neon Echo  (pop, happy, energy 0.82)
+     Although not strictly K-pop, 'Sunrise City' by Neon Echo is a high-energy pop track with a happy mood and low acousticness that fits the uplifting vibe you are looking for.
+2. Gym Hero — Max Pulse  (pop, intense, energy 0.93)
+     'Gym Hero' delivers the high energy and intense pop production that aligns well with an upbeat, euphoric playlist.
+```
 
-## Experiments You Tried
+**4. Guardrail on bad input:**
+```
+$ python -m src.main ""
+Invalid request: Please describe what you want to listen to.
+```
 
-### Experiment 1: Weight shift (energy ×2, genre ×½)
+## Design Decisions
 
-**Change:** in `src/recommender.py`, `GENRE_WEIGHT` went from 2.0 to **1.0** and `ENERGY_WEIGHT` went from 1.0 to **2.0**. Mood (1.0) and acoustic (0.5) stayed the same.
-
-**Is the math still valid?** Yes. The maximum score is still 1.0 + 1.0 + 2.0 + 0.5 = **4.5**, and for valid inputs (energy 0–1) every score stays between 0 and 4.5. The only exception is the existing out-of-range bug: with energy doubled, a target of 1.5 now produces **−0.64** energy points instead of −0.32.
-
-**Top 5 before → after:**
-
-| Profile | Baseline (genre 2.0, energy 1.0) | Experiment (genre 1.0, energy 2.0) |
+| Decision | Why | Trade-off |
 |---|---|---|
-| High-Energy Pop | Sunrise City, **Gym Hero, Rooftop Lights**, Concrete Crown, Storm Runner | Sunrise City, **Rooftop Lights, Gym Hero**, Concrete Crown, *Night Drive Loop* |
-| Chill Lofi | Library Rain, Midnight Coding, Focus Flow, Spacewalk Thoughts, Coffee Shop Stories | *(same order)* |
-| Deep Intense Rock | Storm Runner, Gym Hero, Laser Rush, Iron Furnace, Fuego en la Pista | *(same order)*; Storm Runner's lead over #2 shrank from 2.00 to 1.01 |
-| Sad but Hyped | Laser Rush, Gym Hero, Storm Runner, Iron Furnace, **Empty Train Station** | Laser Rush, Storm Runner, Gym Hero, Iron Furnace, *Fuego en la Pista* (sad song dropped out) |
-| Acoustic Headbanger | Iron Furnace, then near-ties | Iron Furnace, then near-ties in a different order |
-| Ghost Genre | Velvet After Hours, Concrete Crown, Island Breeze, Night Drive Loop, Dusty Porch Swing | Velvet After Hours, *Dusty Porch Swing*, Island Breeze, *Midnight Bayou Blues*, *Midnight Coding* |
-| Out-of-Range Energy | Moonlit Sonata (3.16) | Moonlit Sonata (**1.84**): the negative-points bug doubled |
+| **Reuse the Module 3 scorer as the retriever** instead of embeddings or a vector database | The catalog is small and structured (genre, mood, energy). A transparent scoring rule is easy to test and explain, and keeps the original project at the core. | Retrieval is only as good as the scorer. It needs exact genre and mood words, which is why the LLM's first job is translating free text into those words. |
+| **The LLM returns JSON (song IDs + reasons), and code renders the answer** | Code can check every pick against the retrieved set and drop invented songs. Free text would be much harder to check. | The answer is less conversational than a chat reply. |
+| **Gemini may return fewer than 5 songs** | Better 2 strong picks than 5 padded with poor fits. The prompt also asks it to be honest when nothing fits. | Users sometimes get short lists, and this inflates the precision metric. The evaluation reports pick counts alongside precision for that reason. |
+| **Fallbacks at each LLM step** (keyword parser, template answer) | The app always answers, even with no key, a rate limit or an outage, and anyone can run it without an account. | Offline answers are noticeably worse (see Testing Summary). |
+| **The user's text is wrapped in `<request>` tags and labeled as data** | A basic defense against prompt injection ("ignore your rules and…"). | Not bulletproof, but the grounding check limits the damage regardless. |
+| **`gemini-3.5-flash-lite` at temperature 0** | Free tier, fast, and good enough for short structured tasks. | Free tier allows 15 requests per minute, so the client spaces calls about 4 seconds apart and honors the server's retry hints. Temperature 0 still isn't fully deterministic (see below). |
+| **A fake LLM in unit tests** | Tests are fast, free and repeatable, and can simulate failures like outages and invented IDs on demand. | Unit tests don't catch real model behavior. That's what the evaluation harness is for. |
 
-**More accurate or just different?** Mostly **just different**, with one improvement and one regression:
+## Testing Summary
 
-- **#1 never changed.** In all 7 profiles, the song that matches genre, mood and energy still wins. The top pick is robust to this weight change.
-- **Improvement:** for High-Energy Pop, the happy indie-pop song (Rooftop Lights) now beats the intense gym track (Gym Hero). That fits a "happy" listener better, and it reduces the genre bias noted earlier.
-- **Regression:** for Sad but Hyped, the only sad song fell out of the top 5. With energy worth twice as much, its mood match can no longer make up for its low energy.
-- **Ranks 3–5 are still near-ties.** They're now decided almost entirely by energy closeness, so the "loud, non-acoustic cluster" problem is stronger.
+**Unit tests:** `pytest` runs 10 tests and all pass. They cover the input and profile guardrails, JSON parsing, dropping invented song IDs, checking that the retrieved candidates actually appear in the prompt, and falling back when the LLM fails.
 
-**Decision:** the baseline weights (genre 2.0, energy 1.0) were restored. The experiment shows that changing weights only reshuffles the middle of the list. The bigger problems (no valence, exact-match moods, small catalog) need new features or data, not different weights.
+**Evaluation** (`python -m src.evaluate`): 10 human-written requests, each with acceptable genres, moods and an energy range. Gemini ran each request twice to measure consistency.
 
----
+| Metric | Offline baseline (keywords + scorer) | Gemini RAG |
+|---|---|---|
+| Top pick fits the request (hit@1) | 100% | 100% |
+| Precision (share of returned picks that fit) | 0.40 | **0.96** |
+| Average songs returned | 5 | 2 |
+| Average energy in expected range | 90% | **100%** |
+| Grounded (no songs outside the retrieved set) | 100% | 100% |
+| Same top 3 songs across repeated runs | 100% | **60%** |
+| Fallback used | 100% | 0% |
 
-## Limitations and Risks
+**What worked:**
+- Gemini understands requests that don't name a genre or mood. "Rainy day" maps to folk/sad, and "date night" to R&B/romantic.
+- The grounding guardrail never had to fire in evaluation, and unit tests prove it does when needed.
+- Fallbacks kept the app working through rate limits and a bad model name.
 
-- **Tiny, made-up catalog.** There are only 20 songs, and 12 of the 17 genres have a single song, so most users get at most one genre match.
-- **A "loud song" filter bubble.** After genre matches run out, energy decides the ranking, so high-energy users all get the same cluster of loud songs. Storm Runner appeared in 5 of 7 test profiles.
-- **No happy-vs-dark signal.** Valence isn't scored, so a "sad but hyped" listener gets cheerful songs.
-- **Strict exact matching.** "indie pop" isn't "pop", and "relaxed" isn't "chill".
-- **Silent failures.** Unknown genres get low-confidence results with no warning, and an energy target above 1.0 produces negative points.
-- **No understanding of lyrics, language, vocals or culture.**
+**What didn't:**
+- **Consistency:** at temperature 0, only 6 of 10 requests returned the same top songs on both runs.
+- **Out-of-catalog requests:** Gemini quietly maps "k-pop" to "pop" in the profile instead of keeping it unknown, so the weak-match warning doesn't fire. Its written summary is still honest about it.
+- **Short lists:** some requests get just 1 song. That's honest given a 20-song catalog, but it's a thin answer.
 
-See section 6 of the [model card](model_card.md) for details.
-
----
+**What I learned from testing:**
+- **A single metric can mislead.** Gemini's precision looked near-perfect until I counted how many songs it returned, so the report now shows both numbers.
+- **Testing caught real bugs:**
+  - The keyword parser matched "pop" inside "k-pop".
+  - The configured model name returned a 404 with my key.
+  - The first evaluation run hit the free-tier rate limit, which led to request pacing and to no longer retrying permanent errors.
 
 ## Reflection
 
-Read and complete `model_card.md`:
+This project taught me that most of the work in an applied AI system isn't the model call. It's everything around it: deciding what the model is allowed to see, checking what it returns, and planning what happens when it fails. Keeping the deterministic Module 3 scorer as the retriever made the AI's behavior far easier to reason about and test. Measuring against a simple baseline also kept me honest about what the LLM actually added.
 
-[**Model Card**](model_card.md)
+My full responsible-AI reflection, covering how I worked with AI tools, the suggestions I accepted and rejected, and the system's limitations and risks, is in **[model_card.md](model_card.md)**.
 
-How recommenders turn data into predictions
+## Project Structure
 
-Building this project showed me that a recommender doesn't "understand" music. It turns each song into numbers and labels (genre, mood, energy, acousticness) and compares them to what the user says they like. My system gives points for each match: 2 for genre, 1 for mood, up to 1 for how close the energy is, and up to 0.5 for acoustic fit. Then it sorts every song by its total and shows the top five. The "prediction" is really a guess that a song with a high score is one the user will enjoy. I was surprised how convincing that felt: with only a few rules, my Chill Lofi profile got a list that looked like a real study playlist, and the printed reasons made each pick feel thoughtful.
-
-Where bias or unfairness can show up
-
-I also saw how easily bias slips in, even without anyone meaning it. Since 12 of my 17 genres had only one song, most users got at most one genre match, and the rest of their list was filled by whichever songs had the closest energy. That created a "loud song" bubble: Storm Runner appeared in 5 of my 7 test profiles. Users with less common tastes were treated worse. A "sad but hyped" listener got cheerful songs, because my system doesn't measure how happy or dark a song sounds. A k-pop fan got five confident-looking picks that matched nothing, with no warning. Even the choice to make genre worth twice as much as mood meant a happy-pop fan got an intense gym song ranked above a happy indie-pop song. In a real app with millions of songs and users, choices like these decide which artists get heard and which listeners get good recommendations, so the weights and the data need to be checked as carefully as the code.
-
-
-
+```
+applied-ai-system-project/
+├── src/
+│   ├── main.py          # CLI: requests, logging setup, Module 3 demo
+│   ├── assistant.py     # RAG pipeline + guardrails
+│   ├── llm_client.py    # Gemini wrapper (JSON output, pacing, retries)
+│   ├── recommender.py   # Module 3 scorer, used as the retriever
+│   └── evaluate.py      # evaluation harness vs. offline baseline
+├── tests/               # pytest suite (fake LLM, no key needed)
+├── data/songs.csv       # 20-song catalog
+├── diagrams/architecture.mmd
+├── assets/              # images for docs
+├── docs/                # original Module 3 report
+├── model_card.md        # model card + responsible-AI reflection
+└── .env.example         # copy to .env and add GEMINI_API_KEY
+```
