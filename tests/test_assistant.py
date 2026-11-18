@@ -66,8 +66,11 @@ def test_keyword_parse_prefers_longest_genre_and_sets_energy():
 
 def test_parse_json_text_handles_code_fences():
     assert parse_json_text('```json\n{"a": 1}\n```') == {"a": 1}
+    assert parse_json_text("[1, 2]") == [1, 2]
     with pytest.raises(LLMError):
         parse_json_text("not json")
+    with pytest.raises(LLMError):
+        parse_json_text('"just a string"')
 
 
 # --- retrieval-grounded generation -----------------------------------------
@@ -78,6 +81,15 @@ def test_validate_picks_drops_ids_outside_candidates():
     picks, dropped = validate_picks(raw, candidates, k=5)
     assert [p.song["id"] for p in picks] == [SONGS[0]["id"]]
     assert 999 in dropped
+
+
+def test_validate_picks_clamps_confidence():
+    candidates = [(s, 3.0, "") for s in SONGS[:3]]
+    raw = {"picks": [{"id": SONGS[0]["id"], "confidence": 1.7},
+                     {"id": SONGS[1]["id"], "confidence": "high"},
+                     {"id": SONGS[2]["id"], "confidence": 0.64}]}
+    picks, _ = validate_picks(raw, candidates, k=5)
+    assert [p.confidence for p in picks] == [1.0, None, 0.64]
 
 
 def test_llm_pipeline_uses_retrieved_songs_only():
@@ -94,6 +106,14 @@ def test_llm_pipeline_uses_retrieved_songs_only():
     assert result.dropped_ids == [12345]
     # The answer prompt must contain the retrieved candidates (that is the "augmented" part).
     assert "Candidates:" in llm.prompts[1] and f"id={lofi_ids[0]}" in llm.prompts[1]
+
+
+def test_bare_list_answer_is_accepted():
+    lofi_ids = [s["id"] for s in SONGS if s["genre"] == "lofi"]
+    llm = FakeLLM([LOFI_PROFILE], [{"id": lofi_ids[0], "why": "calm", "confidence": 0.9}])
+    result = recommend_from_text("chill beats to study to", SONGS, llm=llm, k=3)
+    assert result.profile_source == "llm" and result.answer_source == "llm"
+    assert result.picks[0].confidence == 0.9
 
 
 def test_llm_failure_falls_back_to_keywords_and_template():

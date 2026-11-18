@@ -152,7 +152,8 @@ def print_result(result: AssistantResult) -> None:
     for rank, pick in enumerate(result.picks, start=1):
         song = pick.song
         print(f"{rank}. {song['title']} — {song['artist']}  ({song['genre']}, {song['mood']}, energy {song['energy']:.2f})")
-        print(f"     {pick.why}")
+        confidence = f"  [confidence {pick.confidence:.2f}]" if pick.confidence is not None else ""
+        print(f"     {pick.why}{confidence}")
     print(f"\n[answer: {result.answer_source} | retrieved {len(result.candidates)} candidates]\n")
 
 

@@ -25,8 +25,8 @@ class LLMError(RuntimeError):
     """Raised when the LLM is unavailable or returns something unusable."""
 
 
-def parse_json_text(text: str) -> Dict[str, Any]:
-    """Parses a JSON object from model output, tolerating ```json fences."""
+def parse_json_text(text: str) -> Any:
+    """Parses a JSON object or array from model output, tolerating ```json fences."""
     cleaned = (text or "").strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
@@ -36,8 +36,8 @@ def parse_json_text(text: str) -> Dict[str, Any]:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
         raise LLMError(f"Model did not return valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise LLMError("Model returned JSON that is not an object.")
+    if not isinstance(data, (dict, list)):
+        raise LLMError("Model returned JSON that is not an object or list.")
     return data
 
 
@@ -68,8 +68,8 @@ class GeminiClient:
             time.sleep(wait)
         self._last_call = time.monotonic()
 
-    def generate_json(self, prompt: str, temperature: float = 0.0) -> Dict[str, Any]:
-        """Sends a prompt and returns the JSON object the model replies with."""
+    def generate_json(self, prompt: str, temperature: float = 0.0) -> Any:
+        """Sends a prompt and returns the parsed JSON (object or list) the model replies with."""
         config = self._types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=temperature,

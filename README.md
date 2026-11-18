@@ -131,7 +131,7 @@ Requires **Python 3.10+**. Run all commands from the project root.
    ```
 6. **Test and evaluate**
    ```bash
-   pytest                         # 10 unit tests, no API key needed
+   pytest                         # 12 unit tests, no API key needed
    python -m src.evaluate         # baseline vs. Gemini on 10 requests (~3-4 min on the free tier)
    ```
 
@@ -202,36 +202,60 @@ Invalid request: Please describe what you want to listen to.
 
 ## Testing Summary
 
-**Unit tests:** `pytest` runs 10 tests and all pass. They cover the input and profile guardrails, JSON parsing, dropping invented song IDs, checking that the retrieved candidates actually appear in the prompt, and falling back when the LLM fails.
+> **12 of 12 unit tests pass, and Gemini passed all 10 evaluation cases with 0 fallbacks.** Gemini's precision is 0.94 versus 0.40 for the keyword baseline, and it never recommended a song outside the retrieved set. Its self-rated confidence is meaningful: 0.91 on picks that fit versus 0.72 on picks that didn't. The weak spots are consistency (7 of 10 requests gave the same top 3 songs across two runs) and short lists (about 2 songs per answer). Reliability improved after adding request pacing and accepting Gemini's occasional bare-list reply: the fallback rate dropped from 20% to 0%.
 
-**Evaluation** (`python -m src.evaluate`): 10 human-written requests, each with acceptable genres, moods and an energy range. Gemini ran each request twice to measure consistency.
+The system is checked four ways:
 
-| Metric | Offline baseline (keywords + scorer) | Gemini RAG |
+1. **Automated tests:** `pytest` runs 12 tests that use a fake LLM, so no key is needed.
+2. **Evaluation harness:** `python -m src.evaluate` runs 10 human-written requests, each with acceptable genres, moods and an energy range, through both the offline baseline and Gemini. Gemini runs each request twice to measure consistency. Results go to [docs/evaluation_results.md](docs/evaluation_results.md) as a table and to `logs/eval_report.json`.
+3. **Confidence scoring:** Gemini rates each pick from 0 to 1. Code clamps the value to that range, the CLI shows it, and the evaluator checks whether high confidence actually goes with correct picks.
+4. **Logging and error handling:** every step, retry, fallback and dropped song is written to `logs/assistant.log` with the reason.
+
+### Guardrail checks (automated, `pytest`)
+
+| Test input | Evaluation criteria | Result |
+|---|---|---|
+| Empty request `""` | Rejected with a clear message, no crash | Pass |
+| 301-character request | Rejected as too long | Pass |
+| Profile with energy 1.5 and genre "K-Pop" | Energy clamped to 1.0; unknown-genre warning | Pass |
+| LLM recommends song ID 12345 (not retrieved) | ID dropped and logged; only real picks shown | Pass |
+| Confidence of 1.7 or "high" | Clamped to 1.0, or ignored if not a number | Pass |
+| LLM returns a bare JSON list | Accepted as the picks | Pass |
+| LLM raises an error on both calls | Keyword parser + template answer, still 3 picks | Pass |
+| "k-pop that feels euphoric" (offline) | Flagged as weak match; "pop" not matched inside "k-pop" | Pass |
+
+### Evaluation results (live Gemini vs. offline baseline)
+
+| Metric | Offline baseline | Gemini RAG |
 |---|---|---|
 | Top pick fits the request (hit@1) | 100% | 100% |
-| Precision (share of returned picks that fit) | 0.40 | **0.96** |
+| Precision (share of returned picks that fit) | 0.40 | **0.94** |
 | Average songs returned | 5 | 2 |
 | Average energy in expected range | 90% | **100%** |
-| Grounded (no songs outside the retrieved set) | 100% | 100% |
-| Same top 3 songs across repeated runs | 100% | **60%** |
+| Grounded (no songs outside retrieved set) | 100% | 100% |
+| Same top 3 across repeated runs | 100% | **70%** |
 | Fallback used | 100% | 0% |
+| Average confidence: picks that fit / don't fit | n/a | 0.91 / 0.72 |
+
+Per-case results are in [docs/evaluation_results.md](docs/evaluation_results.md).
 
 **What worked:**
 - Gemini understands requests that don't name a genre or mood. "Rainy day" maps to folk/sad, and "date night" to R&B/romantic.
-- The grounding guardrail never had to fire in evaluation, and unit tests prove it does when needed.
-- Fallbacks kept the app working through rate limits and a bad model name.
+- The grounding guardrail never had to fire in evaluation, and the unit tests prove it does when needed.
+- Confidence carries a real signal: picks that didn't fit got about 0.2 lower confidence than picks that did.
 
 **What didn't:**
-- **Consistency:** at temperature 0, only 6 of 10 requests returned the same top songs on both runs.
-- **Out-of-catalog requests:** Gemini quietly maps "k-pop" to "pop" in the profile instead of keeping it unknown, so the weak-match warning doesn't fire. Its written summary is still honest about it.
+- **Consistency:** even at temperature 0, 3 of 10 requests returned different top songs on a second run.
+- **Out-of-catalog requests:** Gemini quietly maps "k-pop" to "pop" in the profile, so the weak-match warning doesn't fire. Its written summary still says K-pop isn't in the catalog, and its confidence on that pick was lower (0.65).
 - **Short lists:** some requests get just 1 song. That's honest given a 20-song catalog, but it's a thin answer.
 
-**What I learned from testing:**
+**What I learned:**
 - **A single metric can mislead.** Gemini's precision looked near-perfect until I counted how many songs it returned, so the report now shows both numbers.
-- **Testing caught real bugs:**
+- **Testing kept finding real bugs:**
   - The keyword parser matched "pop" inside "k-pop".
   - The configured model name returned a 404 with my key.
-  - The first evaluation run hit the free-tier rate limit, which led to request pacing and to no longer retrying permanent errors.
+  - The free-tier rate limit caused fallbacks, which led to request pacing and to no longer retrying permanent errors.
+  - After I added confidence to the prompt, Gemini sometimes returned a bare list instead of the requested object. The fallback hid this from users, and only the log and the fallback-rate metric revealed it.
 
 ## Reflection
 
@@ -253,7 +277,7 @@ applied-ai-system-project/
 ├── data/songs.csv       # 20-song catalog
 ├── diagrams/architecture.mmd
 ├── assets/              # images for docs
-├── docs/                # original Module 3 report
+├── docs/                # evaluation results + original Module 3 report
 ├── model_card.md        # model card + responsible-AI reflection
 └── .env.example         # copy to .env and add GEMINI_API_KEY
 ```
