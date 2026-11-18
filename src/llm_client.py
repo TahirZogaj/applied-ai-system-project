@@ -8,14 +8,17 @@ fake client can stand in for Gemini in tests and in offline mode.
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("music_assistant.llm")
 
 # Override with GEMINI_MODEL in .env if this model name changes.
-DEFAULT_MODEL = "gemini-flash-lite-latest"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MAX_ATTEMPTS = 3
+# Free tier allows ~15 requests/minute; space calls out to stay under it.
+MIN_SECONDS_BETWEEN_CALLS = float(os.getenv("GEMINI_MIN_INTERVAL", "4.2"))
 
 
 class LLMError(RuntimeError):
@@ -57,6 +60,13 @@ class GeminiClient:
         self._types = types
         self.client = genai.Client(api_key=key)
         self.model = model or os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
+        self._last_call = 0.0
+
+    def _throttle(self) -> None:
+        wait = MIN_SECONDS_BETWEEN_CALLS - (time.monotonic() - self._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
 
     def generate_json(self, prompt: str, temperature: float = 0.0) -> Dict[str, Any]:
         """Sends a prompt and returns the JSON object the model replies with."""
@@ -66,6 +76,7 @@ class GeminiClient:
         )
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            self._throttle()
             try:
                 response = self.client.models.generate_content(
                     model=self.model, contents=prompt, config=config
@@ -75,8 +86,17 @@ class GeminiClient:
                 raise
             except Exception as exc:  # network errors, rate limits, server errors
                 last_error = exc
-                rate_limited = "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+                message = str(exc)
+                rate_limited = "429" in message or "RESOURCE_EXHAUSTED" in message
+                # Bad key, bad model name, bad request: retrying will not help.
+                permanent = any(code in message for code in ("400", "401", "403", "404"))
                 logger.warning("Gemini call failed (attempt %d/%d): %s", attempt, MAX_ATTEMPTS, exc)
+                if permanent:
+                    break
                 if attempt < MAX_ATTEMPTS:
-                    time.sleep(10 * attempt if rate_limited else 2 * attempt)
-        raise LLMError(f"Gemini call failed after {MAX_ATTEMPTS} attempts: {last_error}")
+                    # Honour the server's "retry in Ns" hint when it gives one.
+                    hint = re.search(r"retry in ([\d.]+)s", message)
+                    delay = float(hint.group(1)) + 1 if hint else (15 * attempt if rate_limited else 2 * attempt)
+                    logger.info("Retrying in %.0fs", delay)
+                    time.sleep(min(delay, 70))
+        raise LLMError(f"Gemini call failed: {last_error}")

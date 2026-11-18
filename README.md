@@ -426,7 +426,7 @@ python -m src.evaluate          # offline baseline vs. Gemini RAG on 10 requests
 python -m src.evaluate --offline
 ```
 
-The evaluation reports hit@1, precision@5, energy fit, grounding (no invented songs), weak-match flagging, consistency across repeated runs, and fallback rate. The full report is saved to `logs/eval_report.json`.
+The evaluation reports hit@1, precision (share of returned picks that fit), average number of picks, energy fit, grounding (no invented songs), weak-match flagging, consistency across repeated runs, and fallback rate. The full report is saved to `logs/eval_report.json`.
 
 ---
 

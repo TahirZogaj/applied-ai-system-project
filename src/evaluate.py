@@ -3,7 +3,8 @@ Evaluation harness for the AI music recommender.
 
 Runs a fixed set of plain-English requests through the pipeline and measures:
   - hit@1        top pick has an expected genre or mood
-  - precision@k  share of picks with an expected genre or mood
+  - precision    share of returned picks with an expected genre or mood
+  - avg picks    how many songs were returned (the LLM may return fewer than k)
   - energy fit   average pick energy falls in the expected range
   - grounded     the model never recommended a song outside the retrieved set
   - weak-match   out-of-catalog requests are flagged as weak matches
@@ -108,7 +109,8 @@ def evaluate(songs, llm, runs: int) -> Dict[str, Any]:
         "cases": len(rows),
         "runs_per_case": runs,
         "hit_at_1": round(mean(r["hit1"] for r in scored), 2),
-        "precision_at_k": round(mean(r["precision"] for r in scored), 2),
+        "precision": round(mean(r["precision"] for r in scored), 2),
+        "avg_picks": round(mean(len(r["picks"]) for r in rows), 1),
         "energy_fit": round(mean(r["energy_ok"] for r in rows), 2),
         "grounded": round(mean(r["grounded"] for r in rows), 2),
         "weak_match_flagged": round(mean(r["weak_flag_ok"] for r in rows), 2),
@@ -120,12 +122,12 @@ def evaluate(songs, llm, runs: int) -> Dict[str, Any]:
 
 def print_report(name: str, report: Dict[str, Any]) -> None:
     print(f"\n=== {name} ===")
-    print(f"{'request':<42} {'hit@1':>5} {'prec':>5} {'energy':>6} {'grnd':>4} {'fb':>3}")
+    print(f"{'request':<42} {'hit@1':>5} {'prec':>5} {'n':>2} {'energy':>6} {'grnd':>4} {'fb':>3}")
     for r in report["cases"]:
         hit = "-" if r["hit1"] is None else ("Y" if r["hit1"] else "N")
         prec = "-" if r["precision"] is None else f"{r['precision']:.2f}"
         print(
-            f"{r['request'][:42]:<42} {hit:>5} {prec:>5} {('Y' if r['energy_ok'] else 'N'):>6} "
+            f"{r['request'][:42]:<42} {hit:>5} {prec:>5} {len(r['picks']):>2} {('Y' if r['energy_ok'] else 'N'):>6} "
             f"{('Y' if r['grounded'] else 'N'):>4} {('Y' if r['fallback'] else '-'):>3}"
         )
     print("summary:", json.dumps(report["summary"]))
