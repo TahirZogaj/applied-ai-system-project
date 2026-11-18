@@ -1,25 +1,32 @@
-%% Architecture of the Music Recommender (baseline from Module 3).
-%% Update this diagram as the applied AI system evolves.
-flowchart LR
-    subgraph Input
-        CSV[(data/songs.csv<br/>song catalog)]
-        PROF[User taste profile<br/>genre, mood, target energy, likes acoustic]
+%% Architecture of the AI Music Recommender (RAG over the song catalog).
+flowchart TD
+    U([User request in plain English]) --> G1{Guardrail:<br/>validate request}
+    G1 -- empty / too long --> ERR[Show error message]
+    G1 -- ok --> P[Parse request into taste profile<br/>Gemini, JSON output]
+    P -- LLM error --> KP[Keyword parser fallback]
+    P --> G2{Guardrail:<br/>clean profile}
+    KP --> G2
+    G2 -->|clamp energy, fix types,<br/>flag unknown genre/mood| R
+
+    subgraph Retrieval["Retrieval (Module 3 scorer)"]
+        CSV[(data/songs.csv)] --> R[score_song + recommend_songs<br/>top 8 candidates]
     end
 
-    subgraph Core["src/recommender.py"]
-        LOAD[load_songs<br/>parse CSV into dicts]
-        SCORE[score_song<br/>weighted match on genre, mood,<br/>energy and acousticness + reasons]
-        RANK[recommend_songs<br/>sort by score, take top k]
+    R --> W{Weak match?<br/>top score < 2.0}
+    W -->|add warning| GEN
+    W --> GEN[Generate answer<br/>Gemini sees ONLY the 8 candidates]
+    GEN --> G3{Guardrail:<br/>picks must be retrieved ids}
+    G3 -- invented ids dropped --> OUT
+    G3 -- no valid picks / LLM error --> TPL[Template answer<br/>scorer reasons]
+    TPL --> OUT([Ranked picks + explanations + warnings])
+
+    LOG[(logs/assistant.log)]
+    P -.logs.-> LOG
+    R -.logs.-> LOG
+    G3 -.logs.-> LOG
+
+    subgraph Testing
+        T[[pytest: guardrails, grounding,<br/>fallbacks with fake LLM]]
+        E[[src/evaluate.py: hit@1, precision@5,<br/>grounding, consistency vs. offline baseline]]
     end
-
-    subgraph Output["src/main.py"]
-        PRINT[print_recommendations<br/>ranked list, score and explanation]
-    end
-
-    TEST[[tests/test_recommender.py<br/>pytest]]
-
-    CSV --> LOAD --> SCORE
-    PROF --> SCORE
-    SCORE --> RANK --> PRINT
-    TEST -.checks.-> SCORE
-    TEST -.checks.-> RANK
+    E -.runs.-> U

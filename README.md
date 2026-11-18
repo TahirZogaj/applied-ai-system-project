@@ -369,34 +369,64 @@ Profile: EDGE: Out-of-Range Energy
 
 ### Setup
 
-1. Create a virtual environment (optional but recommended):
+1. Create and activate a virtual environment:
 
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate      # Mac or Linux
-   .venv\Scripts\activate         # Windows
+   python3 -m venv .venv
+   source .venv/bin/activate        # macOS / Linux / Git Bash
+   .\.venv\Scripts\Activate.ps1     # Windows PowerShell
+   ```
 
-2. Install dependencies
+2. Install dependencies:
+
+   ```bash
+   python -m pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+3. Add your Gemini API key (free at https://aistudio.google.com/apikey):
+
+   ```bash
+   cp .env.example .env
+   # then edit .env and set GEMINI_API_KEY=...
+   ```
+
+   Without a key the app still runs in **offline mode** (keyword parsing plus the rule-based scorer's explanations).
+
+### Running the app
+
+All commands run from the project root.
 
 ```bash
-pip install -r requirements.txt
+python -m src.main "chill songs for studying"   # one request
+python -m src.main                              # interactive prompt
+python -m src.main --offline "upbeat pop"       # skip Gemini
+python -m src.main --verbose "gym music"        # show each pipeline step
+python -m src.main --demo                       # original Module 3 profile demo
 ```
 
-3. Run the app:
+Every pipeline step is logged to `logs/assistant.log`.
+
+### How the AI pipeline works
+
+See [diagrams/architecture.mmd](diagrams/architecture.mmd).
+
+1. **Guardrail:** reject empty or oversized requests.
+2. **Parse:** Gemini turns the request into a taste profile (genre, mood, energy, acoustic) using the catalog's own genre and mood vocabulary. If the call fails, a keyword parser is used instead.
+3. **Guardrail:** clamp energy to 0-1, fix types, and warn when a genre or mood is not in the catalog.
+4. **Retrieve:** the Module 3 scorer ranks all songs in `data/songs.csv` and keeps the top 8 candidates.
+5. **Generate:** Gemini chooses and explains up to 5 picks, seeing **only** those 8 candidates.
+6. **Guardrail:** any song id not in the retrieved candidates is dropped and logged. If no valid picks remain, the scorer's own explanations are used.
+
+### Running tests and evaluation
 
 ```bash
-python -m src.main
+pytest                          # unit tests (use a fake LLM, no API key needed)
+python -m src.evaluate          # offline baseline vs. Gemini RAG on 10 requests
+python -m src.evaluate --offline
 ```
 
-### Running Tests
-
-Run the starter tests with:
-
-```bash
-pytest
-```
-
-You can add more tests in `tests/test_recommender.py`.
+The evaluation reports hit@1, precision@5, energy fit, grounding (no invented songs), weak-match flagging, consistency across repeated runs, and fallback rate. The full report is saved to `logs/eval_report.json`.
 
 ---
 
