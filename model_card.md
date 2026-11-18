@@ -84,6 +84,19 @@ I built this project with **Claude Code** as my coding assistant, working from t
 
 ---
 
+## Future Improvements
+
+Each of these targets a limitation measured above:
+
+1. **Bigger, more diverse catalog.** Most answers are 1-2 songs because most genres have one song. Adding several songs per genre, plus the genres the guide already marks as missing (K-pop, Afrobeats, soul and others), would fix short lists more than any prompt change.
+2. **Semantic retrieval for the guide.** Replace keyword matching with embeddings, so unlisted synonyms ("debugging", "cramming") still find the right section. Keep the keyword version as a fallback and compare the two in the evaluation harness.
+3. **Better consistency.** Only 64% of repeated runs agreed on the top 3. Options: ask for a fixed number of picks, break ties with the scorer, or run the model twice and keep the songs both runs agree on. Each would be measured with the existing consistency metric.
+4. **Guard the free-text fields.** Cap the length of `why` and `summary` and filter them, closing the remaining prompt-injection gap from the misuse table.
+5. **Calibrate confidence.** Collect more labelled cases and check whether a stated 0.9 is right about 90% of the time, or simply hide the number from users until it is.
+6. **Independent human evaluation.** Have peers write test cases and rate real outputs, so the evaluation stops measuring agreement with only my own taste.
+
+---
+
 ## Appendix: Module 3 Model Card (VibeMatch 1.0)
 
 ### 1. Model Name  
