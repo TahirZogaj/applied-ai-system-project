@@ -4,7 +4,7 @@
 |---|---|
 | **System** | VibeMatch AI, a retrieval-augmented music recommender |
 | **Models** | Google `gemini-3.5-flash-lite` (request parsing and explanations) + the Module 3 rule-based scorer (retrieval) |
-| **Data** | `data/songs.csv`, 20 hand-made songs across 17 genres |
+| **Data** | Two retrieval sources: `data/songs.csv` (20 hand-made songs across 17 genres) and `data/genre_guide.md` (a custom guide with 23 sections: every catalog genre plus 5 popular genres the catalog lacks) |
 | **Intended use** | A classroom and portfolio demo of grounded LLM recommendations: turning a plain-English music request into picks from a small, known catalog, with explanations |
 | **Not intended for** | Real music services, real users at scale, or any decision that matters beyond choosing a song |
 
@@ -16,23 +16,38 @@ The original Module 3 model card, covering the rule-based recommender, its stres
 
 **Data limitations**
 - **Tiny, uneven catalog.** 20 songs, and most genres have only one song. Many requests can only be answered with 1-2 songs, and the same few high-energy songs (e.g. *Gym Hero*, *Storm Runner*) appear for many different requests.
-- **Narrow genre coverage.** The catalog has no K-pop, Afrobeats, Bollywood or other non-Western genres. Requests for them can only get the "closest" Western genre, which quietly treats those listeners as an afterthought.
+- **Narrow genre coverage.** The catalog has no K-pop, Afrobeats, Bollywood or other non-Western genres. Requests for them can only get the "closest" Western genre. The genre guide now makes this explicit with a warning instead of hiding it, but those listeners are still poorly served.
 
 **Inherited from the Module 3 retriever**
 - **Exact-match scoring.** Retrieval is the Module 3 scoring rule, so its biases carry over. Genre is worth 2 points but counts only on an exact word match. Songs that fit the request's feel but carry a different genre label rank lower and may never reach the LLM.
 
 **Introduced by the LLM**
 - **Stereotyped mapping.** Gemini turns activities into stereotypes: "study" becomes lofi, "date night" becomes R&B, "gym" becomes metal. Those are reasonable guesses, but they are the model's assumptions, not the user's taste.
-- **Silent remapping.** Gemini mapped "k-pop" to "pop" in the profile instead of keeping it as unknown, so the code's weak-match warning didn't fire. Its written summary did admit K-pop isn't in the catalog.
-- **Not repeatable.** Even at temperature 0, only 7 of 10 requests returned the same top 3 songs on a second run.
-- **Self-reported confidence.** Confidence scores come from the model itself. They tracked correctness in my test (0.91 on picks that fit vs. 0.72 on picks that didn't), but that's 10 cases, and the model never went above 0.95 or below about 0.65. It isn't calibrated in any statistical sense.
+- **Silent remapping (fixed by the guide).** Without the guide, Gemini mapped "k-pop" to "pop" in the profile, so the code's weak-match warning didn't fire; missing genres were flagged only 50% of the time. The genre guide now detects missing genres deterministically (100%), but genres the guide doesn't list would still slip through.
+- **Hand-written guide.** The guide reflects my own associations ("coding → lofi", "date night → R&B"), and its keyword retrieval only knows the words I listed. An unlisted synonym retrieves nothing.
+- **Not repeatable.** Even at temperature 0, only 64% of requests returned the same top 3 songs on a second run in the final system (57% without the guide).
+- **Self-reported confidence.** Confidence scores come from the model itself. They tracked correctness in my test (0.93 on picks that fit vs. 0.70 on picks that didn't), but that's 14 cases, and the model rarely goes below about 0.35 or above 0.98. It isn't calibrated in any statistical sense.
 
 **Evaluation limitations**
-- **Small, one-person evaluation.** I wrote the 10 test cases and their expected genres and moods myself, so the evaluation measures agreement with *my* idea of what "party music" or "sad songs" means. The same person built the system and graded it.
+- **Small, one-person evaluation.** I wrote the 14 test cases and their expected genres and moods myself, so the evaluation measures agreement with *my* idea of what "party music" or "sad songs" means. The same person built the system and graded it.
 - **Short lists inflate precision.** Gemini often returns only 1-3 songs, which makes precision look better than a 5-song list would. The evaluation reports the pick count next to precision for this reason.
 
 **External dependency**
 - **Reliance on Google's API.** The free tier allows 15 requests per minute, and every request text is sent to Google.
+
+## RAG Enhancement: Impact of the Genre Guide
+
+The first version retrieved from one source, the song catalog. I added a second, custom source, `data/genre_guide.md`, which is retrieved by keyword match (`src/knowledge.py`). Its notes go into both Gemini prompts, the offline parser and a deterministic missing-genre check. The README has full before/after examples. In short:
+
+| Configuration | Passed (of 14) | Precision | Missing genres flagged |
+|---|---|---|---|
+| Offline, songs only → songs + guide | 11 → **14** | 0.37 → **0.48** | 2/2 → 2/2 |
+| Gemini, songs only → songs + guide | 12 → **14** | 1.00 → 0.97 | 1/2 → **2/2** |
+
+- **"background music while coding":** without the guide, Gemini chose ambient and the offline parser found no genre at all. With it, both chose lofi, and Gemini's explanation reused the guide's reasoning ("steady beat and lack of lyrics").
+- **"afrobeats for a summer cookout":** without the guide, there was no weak-match warning and Gemini padded the list with picks at 0.35-0.45 confidence. With it, the user sees "'afrobeats' is not in the catalog; showing the nearest genres (latin, reggae)" and gets one pick at 0.85 confidence.
+
+**Trade-off:** Gemini's precision dipped slightly (1.00 → 0.97). The guide nudges it toward a genre's typical sound, and once that pulled in a calm song outside the expected genres. The gain in honesty about missing genres was worth it.
 
 ## Could It Be Misused, and How I Prevent It
 
@@ -52,7 +67,8 @@ Song recommendations are low-stakes, but the same pattern (an LLM answering from
 1. **Temperature 0 isn't deterministic.** I expected identical inputs to give identical outputs. Instead, 3 of 10 requests returned different top songs on the second run. Any claim about an LLM's behavior needs repeated runs, not a single demo.
 2. **The fallback hid a real failure.** After I added confidence scores to the prompt, Gemini sometimes returned a bare JSON list instead of the object I asked for. Users never noticed, because the app quietly used the template answer. The only signs were a 20% fallback rate in the evaluation and a warning in the log. A system that never crashes can still be failing silently. After I fixed the parsing, the fallback rate dropped to 0%.
 3. **A great number can be a misleading number.** Gemini's precision looked near-perfect, but partly because it returned about 2 songs instead of 5. I would have overstated the improvement if I hadn't checked the pick counts.
-4. **The model was more honest in prose than in structure.** For "k-pop", Gemini's summary openly said the catalog has no K-pop, and its confidence dropped to 0.65. Yet the structured profile it produced said "pop", which bypassed my weak-match check. The free-text part and the machine-readable part of the same answer disagreed.
+4. **The model was more honest in prose than in structure.** For "k-pop", Gemini's summary openly said the catalog has no K-pop, and its confidence dropped to 0.65. Yet the structured profile it produced said "pop", which bypassed my weak-match check. The free-text part and the machine-readable part of the same answer disagreed. This is what motivated the genre guide: a fact like "K-pop is not in the catalog" belongs in retrieved data the code can check, not in the model's judgment.
+7. **Some "failures" were the model being right.** Without the guide, Gemini sometimes returned an empty pick list for Afrobeats with an honest "nothing fits" message. My code counted that as a failure and replaced it with generic picks. Only after logging the raw reply did I see it. The app now keeps the model's explanation and labels the closest songs instead.
 5. **The grounding guardrail never fired live.** Gemini always picked from the retrieved songs. I kept the guardrail anyway: it costs nothing, and the unit test shows it works the day the model changes.
 6. **Most failures were infrastructure, not AI.** A model name that worked in a previous module returned a 404, and the free-tier rate limit caused fallbacks until I added pacing. Neither had anything to do with recommendation quality.
 
@@ -60,7 +76,7 @@ Song recommendations are low-stakes, but the same pattern (an LLM answering from
 
 I built this project with **Claude Code** as my coding assistant, working from the assignment checklists step by step. The AI proposed designs and asked me to make the key decisions: which Module 1-3 project to build on (the Music Recommender), which AI feature to add, and which LLM provider to use (Gemini, the same one as my Module 4 DocuBot). It then wrote the code, tests, evaluation script and documentation, and ran everything against the live API so I could see real results rather than assumed ones. My role was choosing the direction, reviewing outputs and deciding what the numbers really meant.
 
-**A suggestion I accepted: the RAG + testing design.** The AI offered three options: RAG + an evaluation script, an agentic plan-act-retry workflow, or RAG alone. It recommended RAG + testing, and I accepted. It fit my project well: the Module 3 scorer was already a working retriever, so Gemini could take the parts the scorer is bad at (understanding vague requests, writing natural explanations) while the scorer kept doing what it's good at (a fast, transparent ranking I can test). It also meant reliability was built in from the start rather than added at the end. The evaluation later showed precision rising from 0.40 to 0.94 over the keyword baseline.
+**A suggestion I accepted: the RAG + testing design.** The AI offered three options: RAG + an evaluation script, an agentic plan-act-retry workflow, or RAG alone. It recommended RAG + testing, and I accepted. It fit my project well: the Module 3 scorer was already a working retriever, so Gemini could take the parts the scorer is bad at (understanding vague requests, writing natural explanations) while the scorer kept doing what it's good at (a fast, transparent ranking I can test). It also meant reliability was built in from the start rather than added at the end. The final evaluation shows 14/14 cases passing and precision of 0.97, versus 11/14 and 0.37 for the keyword baseline.
 
 **A suggestion I did not accept as written: the precision metric.** The first version of the evaluation script, which the AI wrote, compared the two systems on precision alone. The first live run showed Gemini at 0.87 versus 0.40 for the baseline, which looked like a clear win. The per-case output told a different story: Gemini often returned only 1-3 songs, while the baseline always returned 5. Precision only counts the songs returned, so a system can score higher simply by recommending less. I didn't accept the metric as written. The evaluation was changed to report the **average number of songs returned** right next to precision, in both the terminal table and the README, and the write-up now presents the trade-off openly ("0.94 precision, but about 2 songs per answer"). The original metric wasn't buggy. It answered a narrower question than the one a reader would assume it answered, and it would have made my system look better than it is.
 

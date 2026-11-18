@@ -1,20 +1,22 @@
-%% System architecture: AI Music Recommender (RAG over the song catalog)
+%% System architecture: VibeMatch AI (multi-source RAG: song catalog + genre guide)
 %% Solid arrows = data flow. Dotted arrows = checking / logging.
 flowchart TD
     %% ---------------- INPUT ----------------
     subgraph INPUT["1 · Input"]
         USER(["👤 User<br/>plain-English request<br/>e.g. 'sad acoustic songs for a rainy day'"])
         CSV[("data/songs.csv<br/>20-song catalog")]
+        GUIDE[("data/genre_guide.md<br/>custom genre guide:<br/>activities, moods, missing genres")]
     end
 
     %% ---------------- PROCESS ----------------
     subgraph PROCESS["2 · Process (src/assistant.py)"]
         G1{"Guardrail<br/>validate request<br/>(empty / > 300 chars)"}
+        GRET["Retriever #1: guide notes<br/>src/knowledge.py keyword match<br/>→ top 3 sections"]
         PARSER["Parser (LLM)<br/>Gemini → taste profile JSON<br/>genre · mood · energy · acoustic"]
         KW["Keyword parser<br/>(fallback if Gemini fails)"]
         G2{"Guardrail<br/>clean profile<br/>clamp energy 0-1 · flag unknown genre/mood"}
-        RETRIEVER["Retriever<br/>Module 3 scorer: score_song + recommend_songs<br/>→ top 8 candidate songs"]
-        WEAK{"Weak match?<br/>top score < 2.0"}
+        RETRIEVER["Retriever #2: songs<br/>Module 3 scorer: score_song + recommend_songs<br/>→ top 8 candidate songs"]
+        WEAK{"Weak match?<br/>top score < 2.0 or<br/>guide says genre missing"}
         GENERATOR["Generator (LLM)<br/>Gemini picks ≤ 5 songs + reasons<br/>using ONLY the 8 candidates"]
         G3{"Guardrail<br/>grounding check<br/>every pick id must be a candidate"}
         TPL["Template answer<br/>(fallback: scorer's own reasons)"]
@@ -31,15 +33,20 @@ flowchart TD
         REVIEW(["👤 User reviews picks & warnings<br/>and rephrases if they don't fit"])
         LOG[("logs/assistant.log<br/>every step, fallback, dropped id")]
         DEV(["👤 Developer reads logs & eval report<br/>tunes prompts, weights, guardrails"])
-        CASES["👤 Human-written eval cases<br/>10 requests + expected genres/moods/energy"]
-        EVAL[["Evaluator: src/evaluate.py<br/>hit@1 · precision · energy fit · grounding<br/>consistency · fallback rate vs. offline baseline"]]
+        CASES["👤 Human-written eval cases<br/>14 requests + expected genres/moods/energy"]
+        EVAL[["Evaluator: src/evaluate.py<br/>hit@1 · precision · energy fit · grounding<br/>consistency · confidence · pass/fail<br/>with vs. without guide, LLM vs. offline"]]
         TESTS[["Tester: pytest<br/>guardrails, grounding, fallbacks<br/>(fake LLM, no API key)"]]
     end
 
     %% Data flow
     USER --> G1
     G1 -- invalid --> ERR
-    G1 -- ok --> PARSER
+    G1 -- ok --> GRET
+    GUIDE --> GRET
+    GRET -- notes --> PARSER
+    GRET -- notes --> GENERATOR
+    GRET -- notes --> KW
+    GRET -- missing genre --> WEAK
     PARSER -- API error --> KW
     PARSER --> G2
     KW --> G2
@@ -50,12 +57,14 @@ flowchart TD
     WEAK -- no --> GENERATOR
     GENERATOR --> G3
     G3 -- "valid picks (invented ids dropped)" --> ANSWER
+    G3 -- "LLM declines: keep its message,<br/>show closest songs labelled" --> ANSWER
     G3 -- "no valid picks / API error" --> TPL
     TPL --> ANSWER
 
     %% Checking loops
     ANSWER -.-> REVIEW
     REVIEW -. new request .-> USER
+    GRET -.-> LOG
     PARSER -.-> LOG
     RETRIEVER -.-> LOG
     G3 -.-> LOG

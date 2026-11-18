@@ -116,6 +116,15 @@ def test_bare_list_answer_is_accepted():
     assert result.picks[0].confidence == 0.9
 
 
+def test_llm_declining_keeps_its_message_and_flags_weak_match():
+    llm = FakeLLM(LOFI_PROFILE, {"picks": [], "summary": "Nothing in the catalog fits afrobeats."})
+    result = recommend_from_text("afrobeats for a cookout", SONGS, llm=llm, k=3)
+    assert result.answer_source == "llm_no_match"
+    assert result.summary == "Nothing in the catalog fits afrobeats."
+    assert result.weak_match is True
+    assert len(result.picks) == 3  # closest songs still shown, labelled by the warning
+
+
 def test_llm_failure_falls_back_to_keywords_and_template():
     llm = FakeLLM(LLMError("down"), LLMError("down"))
     result = recommend_from_text("chill lofi to study", SONGS, llm=llm, k=3)
@@ -129,3 +138,39 @@ def test_offline_mode_flags_out_of_catalog_request():
     result = recommend_from_text("k-pop that feels euphoric", SONGS, llm=None)
     assert result.weak_match is True
     assert len(result.picks) == 5
+
+
+# --- second retrieval source: genre guide ------------------------------------
+
+from src.knowledge import load_guide, retrieve_guide  # noqa: E402
+
+GUIDE = load_guide()
+
+
+def test_guide_covers_every_catalog_genre():
+    guide_genres = {s.name for s in GUIDE if s.kind == "genre"}
+    assert set(GENRES) <= guide_genres
+
+
+def test_guide_retrieves_by_activity_and_not_inside_hyphens():
+    assert retrieve_guide("background music while coding", GUIDE)[0].name == "lofi"
+    assert retrieve_guide("late night drive through the city", GUIDE)[0].name == "synthwave"
+    names = [s.name for s in retrieve_guide("k-pop for a euphoric mood", GUIDE)]
+    assert names[0] == "k-pop" and "pop" not in names
+
+
+def test_guide_fills_offline_profile_for_activity_request():
+    without = recommend_from_text("background music while coding", SONGS, llm=None)
+    with_guide = recommend_from_text("background music while coding", SONGS, llm=None, guide=GUIDE)
+    assert without.profile["favorite_genre"] == ""
+    assert with_guide.profile["favorite_genre"] == "lofi"
+    assert with_guide.picks[0].song["genre"] == "lofi"
+
+
+def test_guide_flags_missing_genre_even_if_llm_maps_it():
+    llm = FakeLLM({"favorite_genre": "pop", "favorite_mood": "happy", "target_energy": 0.8, "likes_acoustic": False},
+                  {"picks": [{"id": 1, "why": "closest pop"}], "summary": "No K-pop here."})
+    result = recommend_from_text("k-pop for a euphoric mood", SONGS, llm=llm, guide=GUIDE)
+    assert result.weak_match is True
+    assert any("k-pop" in w for w in result.warnings)
+    assert "NOT IN CATALOG" in llm.prompts[0] and "NOT IN CATALOG" in llm.prompts[1]
