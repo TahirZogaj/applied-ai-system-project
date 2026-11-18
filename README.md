@@ -150,6 +150,8 @@ Requires **Python 3.10+**. Run all commands from the project root.
 
 ## Sample Interactions
 
+More reproducible output, including test results, a step-by-step pipeline trace, offline mode and the evaluation summary, is in [docs/execution_log.md](docs/execution_log.md). Per-case evaluation tables are in [docs/evaluation_results.md](docs/evaluation_results.md).
+
 These are real outputs from `python -m src.main "<request>"` using `gemini-3.5-flash-lite`. The `profile (llm)` line shows how Gemini interpreted the request, and `answer: llm` confirms the picks came from Gemini and passed the grounding check.
 
 **1. Activity-based request.** Gemini maps "study" to the *focused* mood and a low energy target:
@@ -343,7 +345,7 @@ applied-ai-system-project/
 │   └── genre_guide.md   # custom genre guide (retrieval source #1)
 ├── diagrams/architecture.mmd
 ├── assets/              # images for docs
-├── docs/                # evaluation results + original Module 3 report
+├── docs/                # execution log, evaluation results, original Module 3 report
 ├── model_card.md        # model card + responsible-AI reflection
 └── .env.example         # copy to .env and add GEMINI_API_KEY
 ```
