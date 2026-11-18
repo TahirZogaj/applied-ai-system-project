@@ -121,6 +121,8 @@ Requires **Python 3.10+**. Run all commands from the project root.
    # edit .env and set GEMINI_API_KEY=your_key
    ```
    No key? Everything still runs in **offline mode**, using keyword parsing and the rule-based explanations.
+
+   > **Privacy:** in online mode your request text is sent to Google's Gemini API, so don't include personal information. Requests are also logged locally to `logs/assistant.log`, which is git-ignored.
 5. **Run it**
    ```bash
    python -m src.main "chill songs for studying"   # one request
