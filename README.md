@@ -409,7 +409,77 @@ Every pipeline step is logged to `logs/assistant.log`.
 
 ### How the AI pipeline works
 
-See [diagrams/architecture.mmd](diagrams/architecture.mmd).
+Source: [diagrams/architecture.mmd](diagrams/architecture.mmd). Solid arrows are data flow; dotted arrows are checking and logging.
+
+```mermaid
+%% System architecture: AI Music Recommender (RAG over the song catalog)
+%% Solid arrows = data flow. Dotted arrows = checking / logging.
+flowchart TD
+    %% ---------------- INPUT ----------------
+    subgraph INPUT["1 · Input"]
+        USER(["👤 User<br/>plain-English request<br/>e.g. 'sad acoustic songs for a rainy day'"])
+        CSV[("data/songs.csv<br/>20-song catalog")]
+    end
+
+    %% ---------------- PROCESS ----------------
+    subgraph PROCESS["2 · Process (src/assistant.py)"]
+        G1{"Guardrail<br/>validate request<br/>(empty / > 300 chars)"}
+        PARSER["Parser (LLM)<br/>Gemini → taste profile JSON<br/>genre · mood · energy · acoustic"]
+        KW["Keyword parser<br/>(fallback if Gemini fails)"]
+        G2{"Guardrail<br/>clean profile<br/>clamp energy 0-1 · flag unknown genre/mood"}
+        RETRIEVER["Retriever<br/>Module 3 scorer: score_song + recommend_songs<br/>→ top 8 candidate songs"]
+        WEAK{"Weak match?<br/>top score < 2.0"}
+        GENERATOR["Generator (LLM)<br/>Gemini picks ≤ 5 songs + reasons<br/>using ONLY the 8 candidates"]
+        G3{"Guardrail<br/>grounding check<br/>every pick id must be a candidate"}
+        TPL["Template answer<br/>(fallback: scorer's own reasons)"]
+    end
+
+    %% ---------------- OUTPUT ----------------
+    subgraph OUTPUT["3 · Output (src/main.py)"]
+        ANSWER(["Ranked picks + explanations<br/>+ warnings shown to the user"])
+        ERR(["Error message"])
+    end
+
+    %% ---------------- CHECKING ----------------
+    subgraph CHECKS["4 · Humans & testing check the AI"]
+        REVIEW(["👤 User reviews picks & warnings<br/>and rephrases if they don't fit"])
+        LOG[("logs/assistant.log<br/>every step, fallback, dropped id")]
+        DEV(["👤 Developer reads logs & eval report<br/>tunes prompts, weights, guardrails"])
+        CASES["👤 Human-written eval cases<br/>10 requests + expected genres/moods/energy"]
+        EVAL[["Evaluator: src/evaluate.py<br/>hit@1 · precision · energy fit · grounding<br/>consistency · fallback rate vs. offline baseline"]]
+        TESTS[["Tester: pytest<br/>guardrails, grounding, fallbacks<br/>(fake LLM, no API key)"]]
+    end
+
+    %% Data flow
+    USER --> G1
+    G1 -- invalid --> ERR
+    G1 -- ok --> PARSER
+    PARSER -- API error --> KW
+    PARSER --> G2
+    KW --> G2
+    G2 --> RETRIEVER
+    CSV --> RETRIEVER
+    RETRIEVER --> WEAK
+    WEAK -- "yes: add warning" --> GENERATOR
+    WEAK -- no --> GENERATOR
+    GENERATOR --> G3
+    G3 -- "valid picks (invented ids dropped)" --> ANSWER
+    G3 -- "no valid picks / API error" --> TPL
+    TPL --> ANSWER
+
+    %% Checking loops
+    ANSWER -.-> REVIEW
+    REVIEW -. new request .-> USER
+    PARSER -.-> LOG
+    RETRIEVER -.-> LOG
+    G3 -.-> LOG
+    CASES --> EVAL
+    EVAL -. runs full pipeline .-> G1
+    TESTS -. checks .-> PROCESS
+    LOG -.-> DEV
+    EVAL -. eval_report.json .-> DEV
+    DEV -. improves .-> PROCESS
+```
 
 1. **Guardrail:** reject empty or oversized requests.
 2. **Parse:** Gemini turns the request into a taste profile (genre, mood, energy, acoustic) using the catalog's own genre and mood vocabulary. If the call fails, a keyword parser is used instead.
