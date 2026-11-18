@@ -148,60 +148,85 @@ Requires **Python 3.10+**. Run all commands from the project root.
    python -m src.evaluate         # 14 requests × 4 configurations (~9 min on the free tier)
    ```
 
-## Sample Interactions
+## Sample Interactions (Reproducible Execution Evidence)
 
-More reproducible output, including test results, a step-by-step pipeline trace, offline mode and the evaluation summary, is in [docs/execution_log.md](docs/execution_log.md). Per-case evaluation tables are in [docs/evaluation_results.md](docs/evaluation_results.md).
+Every block below is real terminal output from the command on its first line (`gemini-3.5-flash-lite` with the genre guide), copied from [docs/execution_log.md](docs/execution_log.md), which also has test results, offline mode and the evaluation run. Run the same commands after setup to reproduce them; LLM wording varies slightly between runs. In each output:
+- `profile (llm)` shows how Gemini interpreted the request.
+- `guide notes` lists the genre-guide sections that were retrieved.
+- `answer: llm` means the picks came from Gemini and passed the grounding check.
 
-These are real outputs from `python -m src.main "<request>"` using `gemini-3.5-flash-lite`. The `profile (llm)` line shows how Gemini interpreted the request, and `answer: llm` confirms the picks came from Gemini and passed the grounding check.
-
-**1. Activity-based request.** Gemini maps "study" to the *focused* mood and a low energy target:
+**1. Activity-based request.** "Study" maps to the *focused* mood and lofi. The explanations reuse the guide's reasoning (a steady, lyric-free groove):
 ```
-Request: chill lofi beats to study to
-  profile (llm): genre=lofi  mood=focused  energy=0.20  acoustic=False
+$ python -m src.main "chill lofi beats to study to"
 ================================================================
-Here are the best lofi tracks from the catalog to help you stay focused and relaxed while you study.
+Request: chill lofi beats to study to
+  profile (llm): genre=lofi  mood=focused  energy=0.40  acoustic=True
+================================================================
+The catalog has excellent lofi matches with steady beats and low energy, ideal for your study session.
 
 1. Focus Flow — LoRoom  (lofi, focused, energy 0.40)
-     With its focused mood and lofi genre, 'Focus Flow' is an ideal match for studying.
+     With a focused mood, 0.40 energy, and high acousticness, this lofi track provides the steady, lyric-free groove ideal for studying.  [confidence 0.99]
 2. Midnight Coding — LoRoom  (lofi, chill, energy 0.42)
-     'Midnight Coding' brings a chill lofi vibe that fits background study sessions well.
+     This lofi track features a chill mood and balanced 0.42 energy, making it a great background beat for focused work.  [confidence 0.95]
 3. Library Rain — Paper Lanterns  (lofi, chill, energy 0.35)
-     'Library Rain' offers a tranquil, chill atmosphere suited for deep concentration.
+     This lofi track offers a gentle chill mood and low energy of 0.35, perfectly suited for a calm study session.  [confidence 0.92]
 
-[answer: llm | retrieved 8 candidates]
+[answer: llm | retrieved 8 songs | guide notes: lofi, hip hop, reggae]
 ```
 
-**2. Vague request with no genre named.** "Intense and loud for the gym" becomes metal at energy 0.95. Gemini then reaches across genres for other high-energy songs and is open about it ("Although pop…"):
+**2. Vague request with no genre named.** "Intense and loud for the gym" becomes metal at energy 0.95. Gemini reaches across genres for other high-energy songs, and its confidence drops as the fit gets looser (0.98 → 0.85 → 0.75):
 ```
+$ python -m src.main "something intense and loud for the gym"
+================================================================
 Request: something intense and loud for the gym
   profile (llm): genre=metal  mood=intense  energy=0.95  acoustic=False
 ================================================================
+We found some great high-energy metal, rock, and pop tracks to fuel your intense gym session.
+
 1. Iron Furnace — Grave Signal  (metal, angry, energy 0.97)
-     It is a high-energy metal track with extreme intensity, a fast tempo, and low acousticness that fits your gym workout perfectly.
+     "Iron Furnace" by Grave Signal is a metal track with an extreme energy of 0.97 and a fast tempo of 168 bpm, making it the heaviest and loudest choice for lifting weights.  [confidence 0.98]
 2. Storm Runner — Voltline  (rock, intense, energy 0.91)
-     This rock song delivers intense energy and a driven tempo to help power through your workout.
+     "Storm Runner" by Voltline is a rock song featuring high energy at 0.91 and an intense mood, ideal for driving workouts hard.  [confidence 0.85]
 3. Gym Hero — Max Pulse  (pop, intense, energy 0.93)
-     Although pop, it features an intense mood and very high energy tailored for gym sessions.
+     "Gym Hero" by Max Pulse brings an intense pop workout vibe with an energy level of 0.93.  [confidence 0.75]
+
+[answer: llm | retrieved 8 songs | guide notes: rock, metal, edm]
 ```
 
-**3. Request the catalog can't satisfy.** There is no K-pop in the catalog. Gemini says so instead of inventing K-pop songs, and offers the closest real songs:
+**3. Genre the catalog doesn't have.** The genre guide knows Afrobeats is missing, so the app warns the user and names the nearest genres. Gemini says so too and returns one honest pick instead of padding the list:
 ```
-Request: k-pop for a euphoric mood
-  profile (llm): genre=pop  mood=uplifting  energy=0.80  acoustic=False
+$ python -m src.main "afrobeats for a summer cookout"
 ================================================================
-While the current catalog does not contain specific K-pop tracks, I have selected the best energetic pop candidates available to help create a euphoric mood.
+Request: afrobeats for a summer cookout
+  profile (llm): genre=latin  mood=festive  energy=0.80  acoustic=False
+================================================================
+  ! 'afrobeats' is not in the catalog; showing the nearest genres (latin, reggae).
+Afrobeats is not in this catalog, so we selected the nearest available match using festive latin music to keep your summer cookout lively.
 
-1. Sunrise City — Neon Echo  (pop, happy, energy 0.82)
-     Although not strictly K-pop, 'Sunrise City' by Neon Echo is a high-energy pop track with a happy mood and low acousticness that fits the uplifting vibe you are looking for.
-2. Gym Hero — Max Pulse  (pop, intense, energy 0.93)
-     'Gym Hero' delivers the high energy and intense pop production that aligns well with an upbeat, euphoric playlist.
+1. Fuego en la Pista — Los Caminantes  (latin, festive, energy 0.86)
+     With its festive mood, high energy of 0.86, and latin genre, this track provides a vibrant backdrop for an outdoor summer gathering.  [confidence 0.85]
+
+[answer: llm | retrieved 8 songs | guide notes: afrobeats, country, indie pop]
 ```
 
-**4. Guardrail on bad input:**
+**4. Guardrail: invalid input** is rejected without calling the AI:
 ```
 $ python -m src.main ""
 Invalid request: Please describe what you want to listen to.
 ```
+
+**5. Pipeline trace.** `--verbose` prints each logged step: guide retrieval → parsed profile → 8 retrieved songs with scores → final grounded picks:
+```
+$ python -m src.main --verbose "background music while coding" -k 3
+[INFO] Request: 'background music while coding'
+[INFO] Guide sections retrieved: ['lofi', 'ambient']
+[INFO] Parsed profile (llm): {'favorite_genre': 'lofi', 'favorite_mood': 'focused', 'target_energy': 0.4, 'likes_acoustic': True}
+[INFO] Retrieved 8 candidates: [(9, 4.39), (4, 3.38), (2, 3.33), (7, 1.42), (6, 1.34), (19, 1.3), (18, 1.29), (12, 1.27)]
+[INFO] Final picks (llm): [9, 2, 4]
+...
+```
+
+**Reliability and guardrail results:** all 17 automated tests pass. The final system passes 14/14 evaluation cases, compared with 11/14 for the keyword baseline. See the [Testing Summary](#testing-summary) for the guardrail test table and the full metrics, and [docs/evaluation_results.md](docs/evaluation_results.md) for per-case PASS/FAIL tables.
 
 ## RAG Enhancement: Multi-Source Retrieval
 
@@ -327,6 +352,12 @@ Per-case results for all four configurations are in [docs/evaluation_results.md]
 This project taught me that most of the work in an applied AI system isn't the model call. It's everything around it: deciding what the model is allowed to see, checking what it returns, and planning what happens when it fails. Keeping the deterministic Module 3 scorer as the retriever made the AI's behavior far easier to reason about and test. Measuring against a simple baseline also kept me honest about what the LLM actually added.
 
 My full responsible-AI reflection, covering how I worked with AI tools, the suggestions I accepted and rejected, and the system's limitations and risks, is in **[model_card.md](model_card.md)**.
+
+## Portfolio
+
+**Code:** https://github.com/TahirZogaj/applied-ai-system-project
+
+**What this project says about me as an AI engineer:** I treat an LLM as one component in a system, not as the system itself. In VibeMatch AI, I let Gemini do what it's good at, understanding vague human requests and explaining choices. Deterministic code handles what has to be reliable: retrieval, validation, and refusing to recommend a song that doesn't exist. I measure instead of assuming. Every change was judged against a baseline on fixed test cases, and when a number looked too good, as Gemini's precision did, I looked at the per-case output and reported the trade-off instead of the headline. I also care about failing honestly: the system tells users when the catalog can't serve them, logs every step so failures can be traced, and keeps working without the AI when it has to.
 
 ## Project Structure
 
